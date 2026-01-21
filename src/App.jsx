@@ -37,6 +37,8 @@ const purposes = [
   { value: 'investment', label: '投資' }
 ];
 
+const incomeCategories = ['労働', '投資益', 'その他'];
+
 const formatYen = (value) => {
   return new Intl.NumberFormat('ja-JP', {
     style: 'currency',
@@ -432,7 +434,9 @@ export default function App() {
     const lines = items.map((item) => [
       item.date,
       item.type === 'income' ? '収入' : '支出',
-      purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費',
+      item.type === 'income'
+        ? '収入'
+        : purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費',
       item.category,
       item.note || '',
       item.amount
@@ -505,10 +509,19 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!categories.includes(form.category)) {
+    if (form.type === 'expense' && !categories.includes(form.category)) {
       setForm((prev) => ({ ...prev, category: categories[0] || defaultCategories[0] }));
     }
-  }, [categories, form.category]);
+  }, [categories, form.category, form.type]);
+
+  useEffect(() => {
+    if (form.type === 'income' && !incomeCategories.includes(form.category)) {
+      setForm((prev) => ({ ...prev, category: incomeCategories[0], purpose: 'consumption' }));
+    }
+    if (form.type === 'expense' && !categories.includes(form.category)) {
+      setForm((prev) => ({ ...prev, category: categories[0] || defaultCategories[0] }));
+    }
+  }, [form.type, form.category, categories]);
 
   const filtered = useMemo(() => {
     return transactions.filter((item) => toMonth(item.date) === month);
@@ -664,26 +677,33 @@ export default function App() {
               ))}
             </select>
           </label>
-          <label>
-            分類
-            <select
-              value={form.purpose}
-              onChange={(event) => setForm({ ...form, purpose: event.target.value })}
-            >
-              {purposes.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {form.type === 'expense' ? (
+            <label>
+              分類
+              <select
+                value={form.purpose}
+                onChange={(event) => setForm({ ...form, purpose: event.target.value })}
+              >
+                {purposes.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <label>
+              分類
+              <input type="text" value="収入" readOnly />
+            </label>
+          )}
           <label>
             カテゴリ
             <select
               value={form.category}
               onChange={(event) => setForm({ ...form, category: event.target.value })}
             >
-              {categories.map((name) => (
+              {(form.type === 'income' ? incomeCategories : categories).map((name) => (
                 <option key={name} value={name}>
                   {name}
                 </option>
@@ -883,6 +903,11 @@ export default function App() {
                   </td>
                   <td>
                     {purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費'}
+                  </td>
+                  <td>
+                    {item.type === 'income'
+                      ? '収入'
+                      : purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費'}
                   </td>
                   <td>{item.category}</td>
                   <td>{item.note || '-'}</td>
