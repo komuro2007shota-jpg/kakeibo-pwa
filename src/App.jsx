@@ -51,6 +51,8 @@ export default function App() {
   const [categoryDraft, setCategoryDraft] = useState('');
   const [editingCategoryId, setEditingCategoryId] = useState(null);
   const [editingCategoryName, setEditingCategoryName] = useState('');
+  const [budgets, setBudgets] = useState({});
+  const [budgetDrafts, setBudgetDrafts] = useState({});
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -81,7 +83,13 @@ export default function App() {
     if (!session) return;
     loadTransactions();
     loadCategories();
+    loadBudgets(month);
   }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    loadBudgets(month);
+  }, [month, session]);
 
   const loadTransactions = async () => {
     setLoading(true);
@@ -118,6 +126,8 @@ export default function App() {
     await supabase.auth.signOut();
     setTransactions([]);
     setCategories(defaultCategories);
+    setBudgets({});
+    setBudgetDrafts({});
   };
 
   const handleSubmit = async (event) => {
@@ -291,10 +301,67 @@ export default function App() {
     if (error) {
       setStatus(`カテゴリ削除エラー: ${error.message}`);
     } else {
+      await supabase
+        .from('budgets')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('category', name);
       await loadCategories();
       if (form.category === name) {
         setForm((prev) => ({ ...prev, category: defaultCategories[0] }));
       }
+    }
+    setLoading(false);
+  };
+
+  const loadBudgets = async (targetMonth) => {
+    if (!targetMonth) return;
+    const { data, error } = await supabase
+      .from('budgets')
+      .select('*')
+      .eq('month', targetMonth)
+      .order('created_at', { ascending: true });
+    if (error) {
+      setStatus(`予算読み込みエラー: ${error.message}`);
+      return;
+    }
+    const map = {};
+    (data || []).forEach((item) => {
+      map[item.category] = item.amount;
+    });
+    setBudgets(map);
+    setBudgetDrafts((prev) => {
+      const next = { ...prev };
+      Object.entries(map).forEach(([category, amount]) => {
+        next[category] = amount;
+      });
+      return next;
+    });
+  };
+
+  const handleBudgetChange = (name, value) => {
+    setBudgetDrafts((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const saveBudget = async (name) => {
+    const raw = budgetDrafts[name];
+    if (raw === '' || raw === undefined) return;
+    const amountValue = Number(raw);
+    if (Number.isNaN(amountValue) || amountValue < 0) {
+      setStatus('予算は0以上の数値で入力してください');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase.from('budgets').upsert({
+      user_id: session.user.id,
+      month,
+      category: name,
+      amount: Math.floor(amountValue)
+    });
+    if (error) {
+      setStatus(`予算保存エラー: ${error.message}`);
+    } else {
+      await loadBudgets(month);
     }
     setLoading(false);
   };
@@ -352,6 +419,16 @@ export default function App() {
         map.set(item.category, (map.get(item.category) || 0) + item.amount);
       });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
+  }, [filtered]);
+
+  const categorySpendMap = useMemo(() => {
+    const map = {};
+    filtered
+      .filter((item) => item.type === 'expense')
+      .forEach((item) => {
+        map[item.category] = (map[item.category] || 0) + item.amount;
+      });
+    return map;
   }, [filtered]);
 
   const monthlyData = useMemo(() => {
@@ -650,7 +727,12 @@ export default function App() {
                 </>
               ) : (
                 <>
-                  <span>{name}</span>
+                  <div className="category-info">
+                    <span>{name}</span>
+                    <span className="notice">
+                      今月の支出: {formatYen(categorySpendMap[name] || 0)}
+                    </span>
+                  </div>
                   <div className="button-row">
                     <button type="button" onClick={() => startEditCategory(name)} className="ghost">
                       編集
@@ -665,6 +747,31 @@ export default function App() {
                   </div>
                 </>
               )}
+            </div>
+          ))}
+        </div>
+        <div className="category-budgets">
+          <h3>今月の予算（カテゴリ別）</h3>
+          {categories.map((name) => (
+            <div key={`${name}-budget`} className="category-row">
+              <div className="category-info">
+                <span>{name}</span>
+                <span className="notice">
+                  残り: {formatYen((budgets[name] || 0) - (categorySpendMap[name] || 0))}
+                </span>
+              </div>
+              <div className="button-row">
+                <input
+                  type="number"
+                  min="0"
+                  value={budgetDrafts[name] ?? ''}
+                  onChange={(event) => handleBudgetChange(name, event.target.value)}
+                  placeholder="例: 30000"
+                />
+                <button type="button" className="secondary" onClick={() => saveBudget(name)}>
+                  保存
+                </button>
+              </div>
             </div>
           ))}
         </div>

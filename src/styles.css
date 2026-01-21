@@ -253,8 +253,21 @@ button.ghost {
   background: #f6f1e7;
 }
 
+.category-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .category-row input {
   max-width: 240px;
+}
+
+.category-budgets {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 @media (max-width: 720px) {
