@@ -526,67 +526,6 @@ export default function App() {
       </section>
 
       <section className="card">
-        <h2>カテゴリ設定</h2>
-        <form onSubmit={handleAddCategory} className="category-form">
-          <label>
-            新しいカテゴリ
-            <input
-              type="text"
-              value={categoryDraft}
-              onChange={(event) => setCategoryDraft(event.target.value)}
-              placeholder="例: 交際費"
-            />
-          </label>
-          <button type="submit" disabled={loading}>
-            追加する
-          </button>
-        </form>
-        <div className="category-list">
-          {categories.map((name) => (
-            <div key={name} className="category-row">
-              {editingCategoryId === name ? (
-                <>
-                  <input
-                    type="text"
-                    value={editingCategoryName}
-                    onChange={(event) => setEditingCategoryName(event.target.value)}
-                  />
-                  <div className="button-row">
-                    <button
-                      type="button"
-                      onClick={() => handleRenameCategory(name)}
-                      className="secondary"
-                    >
-                      保存
-                    </button>
-                    <button type="button" onClick={cancelEditCategory} className="ghost">
-                      キャンセル
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <span>{name}</span>
-                  <div className="button-row">
-                    <button type="button" onClick={() => startEditCategory(name)} className="ghost">
-                      編集
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteCategory(name)}
-                      className="secondary"
-                    >
-                      削除
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="card">
         <h2>グラフ</h2>
         <div className="charts">
           <div>
@@ -668,6 +607,67 @@ export default function App() {
             </tbody>
           </table>
         )}
+      </section>
+
+      <section className="card">
+        <h2>カテゴリ設定</h2>
+        <form onSubmit={handleAddCategory} className="category-form">
+          <label>
+            新しいカテゴリ
+            <input
+              type="text"
+              value={categoryDraft}
+              onChange={(event) => setCategoryDraft(event.target.value)}
+              placeholder="例: 交際費"
+            />
+          </label>
+          <button type="submit" disabled={loading}>
+            追加する
+          </button>
+        </form>
+        <div className="category-list">
+          {categories.map((name) => (
+            <div key={name} className="category-row">
+              {editingCategoryId === name ? (
+                <>
+                  <input
+                    type="text"
+                    value={editingCategoryName}
+                    onChange={(event) => setEditingCategoryName(event.target.value)}
+                  />
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={() => handleRenameCategory(name)}
+                      className="secondary"
+                    >
+                      保存
+                    </button>
+                    <button type="button" onClick={cancelEditCategory} className="ghost">
+                      キャンセル
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span>{name}</span>
+                  <div className="button-row">
+                    <button type="button" onClick={() => startEditCategory(name)} className="ghost">
+                      編集
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCategory(name)}
+                      className="secondary"
+                    >
+                      削除
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
       </section>
     </div>
   );
