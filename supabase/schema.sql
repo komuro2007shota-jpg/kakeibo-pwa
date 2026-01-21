@@ -6,6 +6,7 @@ create table if not exists public.transactions (
   date date not null,
   amount integer not null,
   type text not null check (type in ('expense', 'income')),
+  purpose text not null default 'consumption' check (purpose in ('consumption', 'waste', 'investment')),
   category text not null,
   note text,
   created_at timestamp with time zone default now()

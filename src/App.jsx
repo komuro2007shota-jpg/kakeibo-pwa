@@ -31,6 +31,12 @@ const types = [
   { value: 'income', label: '収入' }
 ];
 
+const purposes = [
+  { value: 'consumption', label: '消費' },
+  { value: 'waste', label: '浪費' },
+  { value: 'investment', label: '投資' }
+];
+
 const formatYen = (value) => {
   return new Intl.NumberFormat('ja-JP', {
     style: 'currency',
@@ -64,6 +70,7 @@ export default function App() {
     date: new Date().toISOString().slice(0, 10),
     amount: '',
     type: 'expense',
+    purpose: 'consumption',
     category: defaultCategories[0],
     note: ''
   });
@@ -151,6 +158,7 @@ export default function App() {
       date: form.date,
       amount: Math.abs(amountValue),
       type: form.type,
+      purpose: form.purpose,
       category: form.category,
       note: form.note.trim(),
       user_id: session.user.id
@@ -420,10 +428,11 @@ export default function App() {
   };
 
   const downloadCsv = (items, filename) => {
-    const header = ['日付', '種別', 'カテゴリ', 'メモ', '金額'];
+    const header = ['日付', '種別', '分類', 'カテゴリ', 'メモ', '金額'];
     const lines = items.map((item) => [
       item.date,
       item.type === 'income' ? '収入' : '支出',
+      purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費',
       item.category,
       item.note || '',
       item.amount
@@ -525,6 +534,17 @@ export default function App() {
       .filter((item) => item.type === 'expense')
       .forEach((item) => {
         map.set(item.category, (map.get(item.category) || 0) + item.amount);
+      });
+    return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
+  }, [filtered]);
+
+  const purposeData = useMemo(() => {
+    const map = new Map();
+    filtered
+      .filter((item) => item.type === 'expense')
+      .forEach((item) => {
+        const label = purposes.find((p) => p.value === item.purpose)?.label || '消費';
+        map.set(label, (map.get(label) || 0) + item.amount);
       });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
   }, [filtered]);
@@ -638,6 +658,19 @@ export default function App() {
               onChange={(event) => setForm({ ...form, type: event.target.value })}
             >
               {types.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            分類
+            <select
+              value={form.purpose}
+              onChange={(event) => setForm({ ...form, purpose: event.target.value })}
+            >
+              {purposes.map((item) => (
                 <option key={item.value} value={item.value}>
                   {item.label}
                 </option>
@@ -765,6 +798,22 @@ export default function App() {
             )}
           </div>
           <div>
+            <h3>消費・浪費・投資</h3>
+            {purposeData.length === 0 ? (
+              <p className="notice">支出がありません。</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={purposeData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#3a6c8a" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div>
             <h3>月次収支推移</h3>
             {monthlyData.length === 0 ? (
               <p className="notice">データがありません。</p>
@@ -816,6 +865,7 @@ export default function App() {
               <tr>
                 <th>日付</th>
                 <th>種別</th>
+                <th>分類</th>
                 <th>カテゴリ</th>
                 <th>メモ</th>
                 <th>金額</th>
@@ -830,6 +880,9 @@ export default function App() {
                     <span className="badge">
                       {item.type === 'income' ? '収入' : '支出'}
                     </span>
+                  </td>
+                  <td>
+                    {purposes.find((purpose) => purpose.value === item.purpose)?.label || '消費'}
                   </td>
                   <td>{item.category}</td>
                   <td>{item.note || '-'}</td>
