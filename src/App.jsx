@@ -40,6 +40,11 @@ const formatYen = (value) => {
 };
 
 const toMonth = (value) => value?.slice(0, 7) || '';
+const getPreviousMonth = () => {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 1);
+  return date.toISOString().slice(0, 7);
+};
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -53,6 +58,7 @@ export default function App() {
   const [editingCategoryName, setEditingCategoryName] = useState('');
   const [budgets, setBudgets] = useState({});
   const [budgetDrafts, setBudgetDrafts] = useState({});
+  const [copyFromMonth, setCopyFromMonth] = useState(getPreviousMonth);
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -366,6 +372,53 @@ export default function App() {
     setLoading(false);
   };
 
+  const copyBudgetsFromMonth = async () => {
+    if (!copyFromMonth || copyFromMonth === month) {
+      setStatus('コピー元の月を選んでください');
+      return;
+    }
+    if (!confirm(`${copyFromMonth} の予算を ${month} にコピーしますか？`)) return;
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('budgets')
+      .select('*')
+      .eq('month', copyFromMonth);
+    if (error) {
+      setStatus(`予算読み込みエラー: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+    if (!data || data.length === 0) {
+      setStatus('コピー元の予算がありません');
+      setLoading(false);
+      return;
+    }
+    const { error: deleteError } = await supabase
+      .from('budgets')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('month', month);
+    if (deleteError) {
+      setStatus(`予算削除エラー: ${deleteError.message}`);
+      setLoading(false);
+      return;
+    }
+    const payload = data.map((item) => ({
+      user_id: session.user.id,
+      month,
+      category: item.category,
+      amount: item.amount
+    }));
+    const { error: insertError } = await supabase.from('budgets').insert(payload);
+    if (insertError) {
+      setStatus(`予算コピーエラー: ${insertError.message}`);
+    } else {
+      await loadBudgets(month);
+      setStatus('予算をコピーしました');
+    }
+    setLoading(false);
+  };
+
   const downloadCsv = (items, filename) => {
     const header = ['日付', '種別', 'カテゴリ', 'メモ', '金額'];
     const lines = items.map((item) => [
@@ -383,6 +436,61 @@ export default function App() {
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadCategoriesCsv = () => {
+    const header = ['カテゴリ'];
+    const lines = categories.map((name) => [name]);
+    const csv = [header, ...lines].map((row) => `"${row[0].replace(/"/g, '""')}"`).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kakeibo-categories.csv';
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadBudgetsCsv = () => {
+    const header = ['月', 'カテゴリ', '予算'];
+    const lines = Object.entries(budgets).map(([category, amount]) => [
+      month,
+      category,
+      amount
+    ]);
+    const csv = [header, ...lines]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `kakeibo-budgets-${month}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadBudgetsCsvAll = async () => {
+    const { data, error } = await supabase
+      .from('budgets')
+      .select('month, category, amount')
+      .order('month', { ascending: true });
+    if (error) {
+      setStatus(`予算CSVエラー: ${error.message}`);
+      return;
+    }
+    const header = ['月', 'カテゴリ', '予算'];
+    const lines = (data || []).map((item) => [item.month, item.category, item.amount]);
+    const csv = [header, ...lines]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'kakeibo-budgets-all.csv';
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -430,6 +538,18 @@ export default function App() {
       });
     return map;
   }, [filtered]);
+
+  const budgetChartData = useMemo(() => {
+    return categories
+      .map((name) => {
+        const budget = budgets[name] || 0;
+        const spent = categorySpendMap[name] || 0;
+        const remaining = Math.max(budget - spent, 0);
+        const over = Math.max(spent - budget, 0);
+        return { name, budget, spent, remaining, over };
+      })
+      .filter((item) => item.budget > 0 || item.spent > 0);
+  }, [budgets, categories, categorySpendMap]);
 
   const monthlyData = useMemo(() => {
     const map = new Map();
@@ -603,6 +723,29 @@ export default function App() {
       </section>
 
       <section className="card">
+        <h2>バックアップ</h2>
+        <p className="notice">CSVでデータを保存できます。</p>
+        <div className="button-row">
+          <button
+            className="secondary"
+            type="button"
+            onClick={() => downloadCsv(transactions, 'kakeibo-all.csv')}
+          >
+            明細CSV（全期間）
+          </button>
+          <button className="secondary" type="button" onClick={downloadCategoriesCsv}>
+            カテゴリCSV
+          </button>
+          <button className="secondary" type="button" onClick={downloadBudgetsCsvAll}>
+            予算CSV（全期間）
+          </button>
+          <button className="secondary" type="button" onClick={downloadBudgetsCsv}>
+            予算CSV（この月）
+          </button>
+        </div>
+      </section>
+
+      <section className="card">
         <h2>グラフ</h2>
         <div className="charts">
           <div>
@@ -637,6 +780,25 @@ export default function App() {
                   <Line type="monotone" dataKey="expense" stroke="#b84a4a" />
                   <Line type="monotone" dataKey="balance" stroke="#3a6c8a" />
                 </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+          <div>
+            <h3>予算の達成状況</h3>
+            {budgetChartData.length === 0 ? (
+              <p className="notice">予算または支出がありません。</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={260}>
+                <BarChart data={budgetChartData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="spent" stackId="a" fill="#1f4d45" name="支出" />
+                  <Bar dataKey="remaining" stackId="a" fill="#3a6c8a" name="残り" />
+                  <Bar dataKey="over" stackId="a" fill="#b84a4a" name="超過" />
+                </BarChart>
               </ResponsiveContainer>
             )}
           </div>
@@ -751,29 +913,48 @@ export default function App() {
           ))}
         </div>
         <div className="category-budgets">
-          <h3>今月の予算（カテゴリ別）</h3>
-          {categories.map((name) => (
-            <div key={`${name}-budget`} className="category-row">
-              <div className="category-info">
-                <span>{name}</span>
-                <span className="notice">
-                  残り: {formatYen((budgets[name] || 0) - (categorySpendMap[name] || 0))}
-                </span>
-              </div>
-              <div className="button-row">
+          <div className="budget-header">
+            <h3>今月の予算（カテゴリ別）</h3>
+            <div className="button-row">
+              <label className="budget-copy">
+                コピー元
                 <input
-                  type="number"
-                  min="0"
-                  value={budgetDrafts[name] ?? ''}
-                  onChange={(event) => handleBudgetChange(name, event.target.value)}
-                  placeholder="例: 30000"
+                  type="month"
+                  value={copyFromMonth}
+                  onChange={(event) => setCopyFromMonth(event.target.value)}
                 />
-                <button type="button" className="secondary" onClick={() => saveBudget(name)}>
-                  保存
-                </button>
-              </div>
+              </label>
+              <button type="button" className="secondary" onClick={copyBudgetsFromMonth}>
+                今月にコピー
+              </button>
             </div>
-          ))}
+          </div>
+          {categories.map((name) => {
+            const remaining = (budgets[name] || 0) - (categorySpendMap[name] || 0);
+            const isOver = remaining < 0;
+            return (
+              <div key={`${name}-budget`} className={`category-row ${isOver ? 'over-budget' : ''}`}>
+                <div className="category-info">
+                  <span>{name}</span>
+                  <span className={`notice ${isOver ? 'over-budget-text' : ''}`}>
+                    残り: {formatYen(remaining)} {isOver ? '（超過）' : ''}
+                  </span>
+                </div>
+                <div className="button-row">
+                  <input
+                    type="number"
+                    min="0"
+                    value={budgetDrafts[name] ?? ''}
+                    onChange={(event) => handleBudgetChange(name, event.target.value)}
+                    placeholder="例: 30000"
+                  />
+                  <button type="button" className="secondary" onClick={() => saveBudget(name)}>
+                    保存
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </section>
     </div>
