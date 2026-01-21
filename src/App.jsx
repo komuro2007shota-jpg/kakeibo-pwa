@@ -114,6 +114,20 @@ export default function App() {
   });
   const [importKind, setImportKind] = useState('transactions');
   const [importFile, setImportFile] = useState(null);
+  const [goals, setGoals] = useState([]);
+  const [goalDraft, setGoalDraft] = useState({
+    name: '',
+    target_amount: '',
+    current_amount: '',
+    due_date: ''
+  });
+  const [goalEditingId, setGoalEditingId] = useState(null);
+  const [goalEditing, setGoalEditing] = useState({
+    name: '',
+    target_amount: '',
+    current_amount: '',
+    due_date: ''
+  });
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -146,6 +160,7 @@ export default function App() {
     loadTransactions();
     loadCategories();
     loadBudgets(month);
+    loadGoals();
   }, [session]);
 
   useEffect(() => {
@@ -403,6 +418,18 @@ export default function App() {
     if ((data || []).length === 0) {
       await maybeAutoCopyBudgets(targetMonth);
     }
+  };
+
+  const loadGoals = async () => {
+    const { data, error } = await supabase
+      .from('savings_goals')
+      .select('*')
+      .order('created_at', { ascending: true });
+    if (error) {
+      setStatus(`貯金目標読み込みエラー: ${error.message}`);
+      return;
+    }
+    setGoals(data || []);
   };
 
   const maybeAutoCopyBudgets = async (targetMonth) => {
@@ -700,6 +727,85 @@ export default function App() {
       setLoading(false);
       setImportFile(null);
     }
+  };
+
+  const handleGoalSubmit = async (event) => {
+    event.preventDefault();
+    if (!goalDraft.name || !goalDraft.target_amount) return;
+    const target = Number(goalDraft.target_amount);
+    const current = Number(goalDraft.current_amount || 0);
+    if (Number.isNaN(target) || Number.isNaN(current) || target < 0 || current < 0) {
+      setStatus('貯金目標の金額が正しくありません');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase.from('savings_goals').insert({
+      user_id: session.user.id,
+      name: goalDraft.name.trim(),
+      target_amount: Math.floor(target),
+      current_amount: Math.floor(current),
+      due_date: goalDraft.due_date || null
+    });
+    if (error) {
+      setStatus(`貯金目標追加エラー: ${error.message}`);
+    } else {
+      setGoalDraft({ name: '', target_amount: '', current_amount: '', due_date: '' });
+      await loadGoals();
+    }
+    setLoading(false);
+  };
+
+  const startEditGoal = (goal) => {
+    setGoalEditingId(goal.id);
+    setGoalEditing({
+      name: goal.name,
+      target_amount: goal.target_amount,
+      current_amount: goal.current_amount,
+      due_date: goal.due_date || ''
+    });
+  };
+
+  const cancelEditGoal = () => {
+    setGoalEditingId(null);
+    setGoalEditing({ name: '', target_amount: '', current_amount: '', due_date: '' });
+  };
+
+  const saveGoal = async (id) => {
+    const target = Number(goalEditing.target_amount);
+    const current = Number(goalEditing.current_amount || 0);
+    if (!goalEditing.name || Number.isNaN(target) || Number.isNaN(current) || target < 0 || current < 0) {
+      setStatus('貯金目標の金額が正しくありません');
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase
+      .from('savings_goals')
+      .update({
+        name: goalEditing.name.trim(),
+        target_amount: Math.floor(target),
+        current_amount: Math.floor(current),
+        due_date: goalEditing.due_date || null
+      })
+      .eq('id', id);
+    if (error) {
+      setStatus(`貯金目標更新エラー: ${error.message}`);
+    } else {
+      await loadGoals();
+      cancelEditGoal();
+    }
+    setLoading(false);
+  };
+
+  const deleteGoal = async (id) => {
+    if (!confirm('この貯金目標を削除しますか？')) return;
+    setLoading(true);
+    const { error } = await supabase.from('savings_goals').delete().eq('id', id);
+    if (error) {
+      setStatus(`貯金目標削除エラー: ${error.message}`);
+    } else {
+      await loadGoals();
+    }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -1125,6 +1231,159 @@ export default function App() {
           >
             フィルタをクリア
           </button>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>貯金目標</h2>
+        <form onSubmit={handleGoalSubmit} className="goal-form">
+          <label>
+            目標名
+            <input
+              type="text"
+              value={goalDraft.name}
+              onChange={(event) => setGoalDraft((prev) => ({ ...prev, name: event.target.value }))}
+              placeholder="例: 旅行"
+            />
+          </label>
+          <label>
+            目標金額
+            <input
+              type="number"
+              min="0"
+              value={goalDraft.target_amount}
+              onChange={(event) =>
+                setGoalDraft((prev) => ({ ...prev, target_amount: event.target.value }))
+              }
+              placeholder="例: 200000"
+            />
+          </label>
+          <label>
+            現在額
+            <input
+              type="number"
+              min="0"
+              value={goalDraft.current_amount}
+              onChange={(event) =>
+                setGoalDraft((prev) => ({ ...prev, current_amount: event.target.value }))
+              }
+              placeholder="例: 50000"
+            />
+          </label>
+          <label>
+            期限（任意）
+            <input
+              type="date"
+              value={goalDraft.due_date}
+              onChange={(event) => setGoalDraft((prev) => ({ ...prev, due_date: event.target.value }))}
+            />
+          </label>
+          <button type="submit" disabled={loading}>
+            追加する
+          </button>
+        </form>
+        <div className="goal-list">
+          {goals.length === 0 ? (
+            <p className="notice">貯金目標がまだありません。</p>
+          ) : (
+            goals.map((goal) => {
+              const progress = goal.target_amount
+                ? Math.min((goal.current_amount / goal.target_amount) * 100, 100)
+                : 0;
+              return (
+                <div key={goal.id} className="goal-card">
+                  {goalEditingId === goal.id ? (
+                    <>
+                      <div className="goal-grid">
+                        <label>
+                          目標名
+                          <input
+                            type="text"
+                            value={goalEditing.name}
+                            onChange={(event) =>
+                              setGoalEditing((prev) => ({ ...prev, name: event.target.value }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          目標金額
+                          <input
+                            type="number"
+                            min="0"
+                            value={goalEditing.target_amount}
+                            onChange={(event) =>
+                              setGoalEditing((prev) => ({
+                                ...prev,
+                                target_amount: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          現在額
+                          <input
+                            type="number"
+                            min="0"
+                            value={goalEditing.current_amount}
+                            onChange={(event) =>
+                              setGoalEditing((prev) => ({
+                                ...prev,
+                                current_amount: event.target.value
+                              }))
+                            }
+                          />
+                        </label>
+                        <label>
+                          期限（任意）
+                          <input
+                            type="date"
+                            value={goalEditing.due_date || ''}
+                            onChange={(event) =>
+                              setGoalEditing((prev) => ({ ...prev, due_date: event.target.value }))
+                            }
+                          />
+                        </label>
+                      </div>
+                      <div className="button-row">
+                        <button type="button" className="secondary" onClick={() => saveGoal(goal.id)}>
+                          保存
+                        </button>
+                        <button type="button" className="ghost" onClick={cancelEditGoal}>
+                          キャンセル
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="goal-header">
+                        <div>
+                          <h3>{goal.name}</h3>
+                          <p className="notice">
+                            {formatYen(goal.current_amount)} / {formatYen(goal.target_amount)}
+                          </p>
+                          {goal.due_date && <p className="notice">期限: {goal.due_date}</p>}
+                        </div>
+                        <div className="button-row">
+                          <button type="button" className="ghost" onClick={() => startEditGoal(goal)}>
+                            編集
+                          </button>
+                          <button type="button" className="secondary" onClick={() => deleteGoal(goal.id)}>
+                            削除
+                          </button>
+                        </div>
+                      </div>
+                      <div className="goal-progress">
+                        <div className="goal-bar">
+                          <div className="goal-bar-fill" style={{ width: `${progress}%` }} />
+                        </div>
+                        <span className="notice">{Math.round(progress)}%</span>
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       </section>
 
