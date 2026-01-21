@@ -5,7 +5,7 @@ Supabase + Vite + React で動く、個人用の家計簿です。PC/Android/Win
 ## 1. Supabase を作成
 
 1. Supabase で新規プロジェクト作成
-2. SQL Editor で `supabase/schema.sql` を実行
+2. SQL Editor で `supabase/schema.sql` を実行（transactions と categories を作成）
 3. Auth 設定で Email (OTP) を有効化
 
 ## 2. 環境変数を設定
@@ -34,3 +34,8 @@ HTTPS 配信になるので、Android で「ホーム画面に追加」してア
 ## アイコンについて
 
 現在は SVG アイコンのみです。必要なら PNG (192/512) を追加してください。
+
+## 追加機能
+
+- カテゴリの追加/編集/削除（Supabase の categories テーブル）
+- CSVエクスポート（この月 / 全期間）

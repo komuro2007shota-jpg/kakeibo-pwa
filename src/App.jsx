@@ -13,7 +13,7 @@ import {
 } from 'recharts';
 import { supabase } from './lib/supabase.js';
 
-const categories = [
+const defaultCategories = [
   '食費',
   '住居',
   '交通',
@@ -47,12 +47,16 @@ export default function App() {
   const [status, setStatus] = useState('');
   const [loading, setLoading] = useState(false);
   const [transactions, setTransactions] = useState([]);
+  const [categories, setCategories] = useState(defaultCategories);
+  const [categoryDraft, setCategoryDraft] = useState('');
+  const [editingCategoryId, setEditingCategoryId] = useState(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     amount: '',
     type: 'expense',
-    category: categories[0],
+    category: defaultCategories[0],
     note: ''
   });
 
@@ -76,6 +80,7 @@ export default function App() {
   useEffect(() => {
     if (!session) return;
     loadTransactions();
+    loadCategories();
   }, [session]);
 
   const loadTransactions = async () => {
@@ -112,6 +117,7 @@ export default function App() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setTransactions([]);
+    setCategories(defaultCategories);
   };
 
   const handleSubmit = async (event) => {
@@ -155,6 +161,170 @@ export default function App() {
     }
     setLoading(false);
   };
+
+  const loadCategories = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      setStatus(`カテゴリ読み込みエラー: ${error.message}`);
+      setCategories(defaultCategories);
+      setLoading(false);
+      return;
+    }
+
+    if (!data || data.length === 0) {
+      const seedPayload = defaultCategories.map((name) => ({
+        name,
+        user_id: session.user.id
+      }));
+      const { error: seedError } = await supabase.from('categories').insert(seedPayload);
+      if (seedError) {
+        setStatus(`カテゴリ初期化エラー: ${seedError.message}`);
+        setCategories(defaultCategories);
+      } else {
+        const { data: seeded } = await supabase
+          .from('categories')
+          .select('*')
+          .order('created_at', { ascending: true });
+        setCategories((seeded || []).map((item) => item.name));
+      }
+      setLoading(false);
+      return;
+    }
+
+    const nextCategories = data.map((item) => item.name);
+    setCategories(nextCategories);
+    if (!nextCategories.includes(form.category)) {
+      setForm((prev) => ({ ...prev, category: nextCategories[0] || defaultCategories[0] }));
+    }
+    setLoading(false);
+  };
+
+  const handleAddCategory = async (event) => {
+    event.preventDefault();
+    const name = categoryDraft.trim();
+    if (!name) return;
+    setLoading(true);
+    const { error } = await supabase.from('categories').insert({
+      name,
+      user_id: session.user.id
+    });
+    if (error) {
+      setStatus(`カテゴリ追加エラー: ${error.message}`);
+    } else {
+      setCategoryDraft('');
+      await loadCategories();
+    }
+    setLoading(false);
+  };
+
+  const startEditCategory = (name) => {
+    setEditingCategoryId(name);
+    setEditingCategoryName(name);
+  };
+
+  const cancelEditCategory = () => {
+    setEditingCategoryId(null);
+    setEditingCategoryName('');
+  };
+
+  const handleRenameCategory = async (oldName) => {
+    const nextName = editingCategoryName.trim();
+    if (!nextName || nextName === oldName) {
+      cancelEditCategory();
+      return;
+    }
+    setLoading(true);
+    const { error } = await supabase
+      .from('categories')
+      .update({ name: nextName })
+      .eq('user_id', session.user.id)
+      .eq('name', oldName);
+    if (error) {
+      setStatus(`カテゴリ更新エラー: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+
+    await supabase
+      .from('transactions')
+      .update({ category: nextName })
+      .eq('user_id', session.user.id)
+      .eq('category', oldName);
+
+    await loadCategories();
+    if (form.category === oldName) {
+      setForm((prev) => ({ ...prev, category: nextName }));
+    }
+    cancelEditCategory();
+    setLoading(false);
+  };
+
+  const handleDeleteCategory = async (name) => {
+    const { count, error: countError } = await supabase
+      .from('transactions')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', session.user.id)
+      .eq('category', name);
+
+    if (countError) {
+      setStatus(`カテゴリ確認エラー: ${countError.message}`);
+      return;
+    }
+
+    if (count && count > 0) {
+      alert('このカテゴリは既に使われています。先に明細のカテゴリを変更してください。');
+      return;
+    }
+
+    if (!confirm(`カテゴリ「${name}」を削除しますか？`)) return;
+    setLoading(true);
+    const { error } = await supabase
+      .from('categories')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('name', name);
+    if (error) {
+      setStatus(`カテゴリ削除エラー: ${error.message}`);
+    } else {
+      await loadCategories();
+      if (form.category === name) {
+        setForm((prev) => ({ ...prev, category: defaultCategories[0] }));
+      }
+    }
+    setLoading(false);
+  };
+
+  const downloadCsv = (items, filename) => {
+    const header = ['日付', '種別', 'カテゴリ', 'メモ', '金額'];
+    const lines = items.map((item) => [
+      item.date,
+      item.type === 'income' ? '収入' : '支出',
+      item.category,
+      item.note || '',
+      item.amount
+    ]);
+    const csv = [header, ...lines]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  useEffect(() => {
+    if (!categories.includes(form.category)) {
+      setForm((prev) => ({ ...prev, category: categories[0] || defaultCategories[0] }));
+    }
+  }, [categories, form.category]);
 
   const filtered = useMemo(() => {
     return transactions.filter((item) => toMonth(item.date) === month);
@@ -312,14 +482,32 @@ export default function App() {
             <h2>月別サマリー</h2>
             <p className="notice">月を切り替えて集計を確認できます。</p>
           </div>
-          <label>
-            対象月
-            <input
-              type="month"
-              value={month}
-              onChange={(event) => setMonth(event.target.value)}
-            />
-          </label>
+          <div className="summary-actions">
+            <label>
+              対象月
+              <input
+                type="month"
+                value={month}
+                onChange={(event) => setMonth(event.target.value)}
+              />
+            </label>
+            <div className="button-row">
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => downloadCsv(filtered, `kakeibo-${month}.csv`)}
+              >
+                CSV (この月)
+              </button>
+              <button
+                className="secondary"
+                type="button"
+                onClick={() => downloadCsv(transactions, 'kakeibo-all.csv')}
+              >
+                CSV (全期間)
+              </button>
+            </div>
+          </div>
         </div>
         <div className="stats">
           <div className="stat">
@@ -334,6 +522,67 @@ export default function App() {
             <h3>収支</h3>
             <p>{formatYen(stats.balance)}</p>
           </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>カテゴリ設定</h2>
+        <form onSubmit={handleAddCategory} className="category-form">
+          <label>
+            新しいカテゴリ
+            <input
+              type="text"
+              value={categoryDraft}
+              onChange={(event) => setCategoryDraft(event.target.value)}
+              placeholder="例: 交際費"
+            />
+          </label>
+          <button type="submit" disabled={loading}>
+            追加する
+          </button>
+        </form>
+        <div className="category-list">
+          {categories.map((name) => (
+            <div key={name} className="category-row">
+              {editingCategoryId === name ? (
+                <>
+                  <input
+                    type="text"
+                    value={editingCategoryName}
+                    onChange={(event) => setEditingCategoryName(event.target.value)}
+                  />
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={() => handleRenameCategory(name)}
+                      className="secondary"
+                    >
+                      保存
+                    </button>
+                    <button type="button" onClick={cancelEditCategory} className="ghost">
+                      キャンセル
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <span>{name}</span>
+                  <div className="button-row">
+                    <button type="button" onClick={() => startEditCategory(name)} className="ghost">
+                      編集
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCategory(name)}
+                      className="secondary"
+                    >
+                      削除
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ))}
         </div>
       </section>
 

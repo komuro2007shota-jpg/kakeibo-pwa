@@ -165,6 +165,18 @@ button.ghost {
   color: var(--ink);
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.summary-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -219,6 +231,30 @@ button.ghost {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 20px;
+}
+
+.category-form {
+  margin-bottom: 16px;
+}
+
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #f6f1e7;
+}
+
+.category-row input {
+  max-width: 240px;
 }
 
 @media (max-width: 720px) {
