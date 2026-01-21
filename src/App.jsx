@@ -48,6 +48,43 @@ const formatYen = (value) => {
 };
 
 const toMonth = (value) => value?.slice(0, 7) || '';
+const getPreviousMonthFrom = (monthValue) => {
+  if (!monthValue) return getPreviousMonth();
+  const [year, month] = monthValue.split('-').map(Number);
+  if (!year || !month) return getPreviousMonth();
+  const date = new Date(year, month - 2, 1);
+  return date.toISOString().slice(0, 7);
+};
+
+const parseCsv = (text) => {
+  const lines = text.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  return lines.map((line) => {
+    const result = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+      const char = line[i];
+      const next = line[i + 1];
+      if (char === '"' && inQuotes && next === '"') {
+        current += '"';
+        i += 1;
+        continue;
+      }
+      if (char === '"') {
+        inQuotes = !inQuotes;
+        continue;
+      }
+      if (char === ',' && !inQuotes) {
+        result.push(current);
+        current = '';
+        continue;
+      }
+      current += char;
+    }
+    result.push(current);
+    return result.map((cell) => cell.trim());
+  });
+};
 const getPreviousMonth = () => {
   const date = new Date();
   date.setMonth(date.getMonth() - 1);
@@ -67,6 +104,16 @@ export default function App() {
   const [budgets, setBudgets] = useState({});
   const [budgetDrafts, setBudgetDrafts] = useState({});
   const [copyFromMonth, setCopyFromMonth] = useState(getPreviousMonth);
+  const [filters, setFilters] = useState({
+    type: 'all',
+    purpose: 'all',
+    category: 'all',
+    query: '',
+    dateFrom: '',
+    dateTo: ''
+  });
+  const [importKind, setImportKind] = useState('transactions');
+  const [importFile, setImportFile] = useState(null);
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
@@ -353,6 +400,34 @@ export default function App() {
       });
       return next;
     });
+    if ((data || []).length === 0) {
+      await maybeAutoCopyBudgets(targetMonth);
+    }
+  };
+
+  const maybeAutoCopyBudgets = async (targetMonth) => {
+    const storageKey = `budget-copy-${targetMonth}`;
+    if (localStorage.getItem(storageKey)) return;
+    const fromMonth = getPreviousMonthFrom(targetMonth);
+    const { data, error } = await supabase.from('budgets').select('*').eq('month', fromMonth);
+    if (error || !data || data.length === 0) {
+      localStorage.setItem(storageKey, 'skipped');
+      return;
+    }
+    localStorage.setItem(storageKey, 'prompted');
+    if (!confirm(`${fromMonth} の予算を ${targetMonth} に自動コピーしますか？`)) return;
+    const payload = data.map((item) => ({
+      user_id: session.user.id,
+      month: targetMonth,
+      category: item.category,
+      amount: item.amount
+    }));
+    const { error: insertError } = await supabase.from('budgets').insert(payload);
+    if (insertError) {
+      setStatus(`予算コピーエラー: ${insertError.message}`);
+      return;
+    }
+    await loadBudgets(targetMonth);
   };
 
   const handleBudgetChange = (name, value) => {
@@ -508,6 +583,125 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  const purposeFromLabel = (label) => {
+    const found = purposes.find((item) => item.label === label);
+    return found ? found.value : 'consumption';
+  };
+
+  const handleImport = async () => {
+    if (!importFile) return;
+    setLoading(true);
+    try {
+      const text = await importFile.text();
+      const rows = parseCsv(text);
+      if (rows.length <= 1) {
+        setStatus('CSVにデータがありません');
+        setLoading(false);
+        return;
+      }
+      const header = rows[0];
+      const body = rows.slice(1).filter((row) => row.some((cell) => cell.length > 0));
+
+      if (importKind === 'transactions') {
+        if (header[0] !== '日付') {
+          setStatus('明細CSVの形式が違います');
+          setLoading(false);
+          return;
+        }
+        const payload = body
+          .map((row) => {
+            const [date, typeLabel, purposeLabel, category, note, amount] = row;
+            const type = typeLabel === '収入' ? 'income' : 'expense';
+            const purpose = type === 'income' ? 'consumption' : purposeFromLabel(purposeLabel);
+            const amountValue = Number(amount);
+            if (!date || Number.isNaN(amountValue)) return null;
+            return {
+              user_id: session.user.id,
+              date,
+              type,
+              purpose,
+              category: category || (type === 'income' ? incomeCategories[0] : defaultCategories[0]),
+              note: note || '',
+              amount: Math.abs(amountValue)
+            };
+          })
+          .filter(Boolean);
+        if (payload.length === 0) {
+          setStatus('インポートできる明細がありません');
+          setLoading(false);
+          return;
+        }
+        const { error } = await supabase.from('transactions').insert(payload);
+        if (error) {
+          setStatus(`明細インポートエラー: ${error.message}`);
+        } else {
+          await loadTransactions();
+          setStatus('明細をインポートしました');
+        }
+      }
+
+      if (importKind === 'categories') {
+        if (header[0] !== 'カテゴリ') {
+          setStatus('カテゴリCSVの形式が違います');
+          setLoading(false);
+          return;
+        }
+        const payload = body
+          .map((row) => row[0])
+          .filter((name) => name)
+          .map((name) => ({ user_id: session.user.id, name }));
+        if (payload.length === 0) {
+          setStatus('インポートできるカテゴリがありません');
+          setLoading(false);
+          return;
+        }
+        const { error } = await supabase.from('categories').insert(payload);
+        if (error) {
+          setStatus(`カテゴリインポートエラー: ${error.message}`);
+        } else {
+          await loadCategories();
+          setStatus('カテゴリをインポートしました');
+        }
+      }
+
+      if (importKind === 'budgets') {
+        if (header[0] !== '月') {
+          setStatus('予算CSVの形式が違います');
+          setLoading(false);
+          return;
+        }
+        const payload = body
+          .map((row) => {
+            const [monthValue, category, amount] = row;
+            const amountValue = Number(amount);
+            if (!monthValue || !category || Number.isNaN(amountValue)) return null;
+            return {
+              user_id: session.user.id,
+              month: monthValue,
+              category,
+              amount: Math.abs(amountValue)
+            };
+          })
+          .filter(Boolean);
+        if (payload.length === 0) {
+          setStatus('インポートできる予算がありません');
+          setLoading(false);
+          return;
+        }
+        const { error } = await supabase.from('budgets').insert(payload);
+        if (error) {
+          setStatus(`予算インポートエラー: ${error.message}`);
+        } else {
+          await loadBudgets(month);
+          setStatus('予算をインポートしました');
+        }
+      }
+    } finally {
+      setLoading(false);
+      setImportFile(null);
+    }
+  };
+
   useEffect(() => {
     if (form.type === 'expense' && !categories.includes(form.category)) {
       setForm((prev) => ({ ...prev, category: categories[0] || defaultCategories[0] }));
@@ -523,15 +717,43 @@ export default function App() {
     }
   }, [form.type, form.category, categories]);
 
-  const filtered = useMemo(() => {
+  useEffect(() => {
+    if (filters.type !== 'expense' && filters.purpose !== 'all') {
+      setFilters((prev) => ({ ...prev, purpose: 'all' }));
+    }
+    if (filters.type === 'income' && filters.category !== 'all' && !incomeCategories.includes(filters.category)) {
+      setFilters((prev) => ({ ...prev, category: 'all' }));
+    }
+    if (filters.type === 'expense' && filters.category !== 'all' && !categories.includes(filters.category)) {
+      setFilters((prev) => ({ ...prev, category: 'all' }));
+    }
+  }, [filters.type, filters.category, filters.purpose, categories]);
+
+  const monthItems = useMemo(() => {
     return transactions.filter((item) => toMonth(item.date) === month);
   }, [transactions, month]);
 
+  const filteredItems = useMemo(() => {
+    return monthItems.filter((item) => {
+      if (filters.type !== 'all' && item.type !== filters.type) return false;
+      if (filters.purpose !== 'all' && item.type === 'expense' && item.purpose !== filters.purpose)
+        return false;
+      if (filters.category !== 'all' && item.category !== filters.category) return false;
+      if (filters.query) {
+        const target = `${item.note || ''}`.toLowerCase();
+        if (!target.includes(filters.query.toLowerCase())) return false;
+      }
+      if (filters.dateFrom && item.date < filters.dateFrom) return false;
+      if (filters.dateTo && item.date > filters.dateTo) return false;
+      return true;
+    });
+  }, [monthItems, filters]);
+
   const stats = useMemo(() => {
-    const income = filtered
+    const income = filteredItems
       .filter((item) => item.type === 'income')
       .reduce((sum, item) => sum + item.amount, 0);
-    const expense = filtered
+    const expense = filteredItems
       .filter((item) => item.type === 'expense')
       .reduce((sum, item) => sum + item.amount, 0);
     return {
@@ -539,38 +761,64 @@ export default function App() {
       expense,
       balance: income - expense
     };
-  }, [filtered]);
+  }, [filteredItems]);
+
+  const budgetStats = useMemo(() => {
+    const nowMonth = new Date().toISOString().slice(0, 7);
+    const [year, monthValue] = month.split('-').map(Number);
+    const daysInMonth = year && monthValue ? new Date(year, monthValue, 0).getDate() : 0;
+    const daysLeft = nowMonth === month ? Math.max(daysInMonth - new Date().getDate(), 0) : 0;
+    const expenseTotal = filteredItems
+      .filter((item) => item.type === 'expense')
+      .reduce((sum, item) => sum + item.amount, 0);
+    const budgetCategories =
+      filters.type === 'income'
+        ? []
+        : filters.category === 'all'
+        ? Object.keys(budgets)
+        : [filters.category];
+    const budgetTotal = budgetCategories.reduce((sum, name) => sum + (budgets[name] || 0), 0);
+    const percent = budgetTotal > 0 ? Math.round((expenseTotal / budgetTotal) * 100) : 0;
+    return {
+      budgetTotal,
+      expenseTotal,
+      remaining: budgetTotal - expenseTotal,
+      percent,
+      daysLeft,
+      daysInMonth
+    };
+  }, [budgets, filteredItems, filters.category, filters.type, month]);
 
   const categoryData = useMemo(() => {
     const map = new Map();
-    filtered
+    filteredItems
       .filter((item) => item.type === 'expense')
       .forEach((item) => {
         map.set(item.category, (map.get(item.category) || 0) + item.amount);
       });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
-  }, [filtered]);
+  }, [filteredItems]);
 
   const purposeData = useMemo(() => {
     const map = new Map();
-    filtered
+    filteredItems
       .filter((item) => item.type === 'expense')
       .forEach((item) => {
         const label = purposes.find((p) => p.value === item.purpose)?.label || '消費';
         map.set(label, (map.get(label) || 0) + item.amount);
       });
     return Array.from(map.entries()).map(([name, value]) => ({ name, value }));
-  }, [filtered]);
+  }, [filteredItems]);
 
   const categorySpendMap = useMemo(() => {
     const map = {};
-    filtered
+    filteredItems
       .filter((item) => item.type === 'expense')
       .forEach((item) => {
         map[item.category] = (map[item.category] || 0) + item.amount;
       });
     return map;
-  }, [filtered]);
+  }, [filteredItems]);
 
   const budgetChartData = useMemo(() => {
     return categories
@@ -583,6 +831,12 @@ export default function App() {
       })
       .filter((item) => item.budget > 0 || item.spent > 0);
   }, [budgets, categories, categorySpendMap]);
+
+  const filterCategoryOptions = useMemo(() => {
+    if (filters.type === 'income') return incomeCategories;
+    if (filters.type === 'expense') return categories;
+    return Array.from(new Set([...categories, ...incomeCategories]));
+  }, [filters.type, categories]);
 
   const monthlyData = useMemo(() => {
     const map = new Map();
@@ -745,7 +999,7 @@ export default function App() {
               <button
                 className="secondary"
                 type="button"
-                onClick={() => downloadCsv(filtered, `kakeibo-${month}.csv`)}
+                onClick={() => downloadCsv(filteredItems, `kakeibo-${month}.csv`)}
               >
                 CSV (この月)
               </button>
@@ -772,6 +1026,105 @@ export default function App() {
             <h3>収支</h3>
             <p>{formatYen(stats.balance)}</p>
           </div>
+          <div className="stat">
+            <h3>予算</h3>
+            <p>{formatYen(budgetStats.budgetTotal)}</p>
+          </div>
+          <div className="stat">
+            <h3>達成率</h3>
+            <p>{budgetStats.percent}%</p>
+          </div>
+          <div className="stat">
+            <h3>残り</h3>
+            <p>{formatYen(budgetStats.remaining)}</p>
+          </div>
+          <div className="stat">
+            <h3>残日数</h3>
+            <p>{budgetStats.daysLeft}日</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="card">
+        <h2>フィルタ</h2>
+        <div className="filters">
+          <label>
+            種別
+            <select
+              value={filters.type}
+              onChange={(event) => setFilters((prev) => ({ ...prev, type: event.target.value }))}
+            >
+              <option value="all">すべて</option>
+              {types.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            分類
+            <select
+              value={filters.purpose}
+              disabled={filters.type === 'income'}
+              onChange={(event) => setFilters((prev) => ({ ...prev, purpose: event.target.value }))}
+            >
+              <option value="all">すべて</option>
+              {purposes.map((item) => (
+                <option key={item.value} value={item.value}>
+                  {item.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            カテゴリ
+            <select
+              value={filters.category}
+              onChange={(event) => setFilters((prev) => ({ ...prev, category: event.target.value }))}
+            >
+              <option value="all">すべて</option>
+              {filterCategoryOptions.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            日付（開始）
+            <input
+              type="date"
+              value={filters.dateFrom}
+              onChange={(event) => setFilters((prev) => ({ ...prev, dateFrom: event.target.value }))}
+            />
+          </label>
+          <label>
+            日付（終了）
+            <input
+              type="date"
+              value={filters.dateTo}
+              onChange={(event) => setFilters((prev) => ({ ...prev, dateTo: event.target.value }))}
+            />
+          </label>
+          <label>
+            検索（メモ）
+            <input
+              type="text"
+              value={filters.query}
+              onChange={(event) => setFilters((prev) => ({ ...prev, query: event.target.value }))}
+              placeholder="キーワード"
+            />
+          </label>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() =>
+              setFilters({ type: 'all', purpose: 'all', category: 'all', query: '', dateFrom: '', dateTo: '' })
+            }
+          >
+            フィルタをクリア
+          </button>
         </div>
       </section>
 
@@ -794,6 +1147,23 @@ export default function App() {
           </button>
           <button className="secondary" type="button" onClick={downloadBudgetsCsv}>
             予算CSV（この月）
+          </button>
+        </div>
+        <div className="import-row">
+          <label>
+            インポート種別
+            <select value={importKind} onChange={(event) => setImportKind(event.target.value)}>
+              <option value="transactions">明細</option>
+              <option value="categories">カテゴリ</option>
+              <option value="budgets">予算</option>
+            </select>
+          </label>
+          <label>
+            CSVファイル
+            <input type="file" accept=".csv,text/csv" onChange={(event) => setImportFile(event.target.files?.[0] || null)} />
+          </label>
+          <button type="button" className="secondary" onClick={handleImport} disabled={!importFile || loading}>
+            CSVをインポート
           </button>
         </div>
       </section>
@@ -877,7 +1247,7 @@ export default function App() {
       <section className="card">
         <h2>明細</h2>
         {loading && <p className="notice">読み込み中...</p>}
-        {filtered.length === 0 ? (
+        {filteredItems.length === 0 ? (
           <p className="notice">この月の明細はまだありません。</p>
         ) : (
           <table className="table">
@@ -893,7 +1263,7 @@ export default function App() {
               </tr>
             </thead>
             <tbody>
-              {filtered.map((item) => (
+              {filteredItems.map((item) => (
                 <tr key={item.id}>
                   <td>{item.date}</td>
                   <td>
