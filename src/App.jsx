@@ -164,6 +164,20 @@ export default function App() {
   }, [session]);
 
   useEffect(() => {
+    if (!goals.length || typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+    goals.forEach((goal) => {
+      if (goal.current_amount < goal.target_amount) return;
+      const key = `goal-notified-${goal.id}`;
+      if (localStorage.getItem(key)) return;
+      new Notification('貯金目標を達成しました！', {
+        body: `${goal.name} が目標金額に到達しました。`
+      });
+      localStorage.setItem(key, 'done');
+    });
+  }, [goals]);
+
+  useEffect(() => {
     if (!session) return;
     loadBudgets(month);
   }, [month, session]);
@@ -755,6 +769,23 @@ export default function App() {
     setLoading(false);
   };
 
+  const requestNotificationPermission = async () => {
+    if (typeof Notification === 'undefined') {
+      setStatus('このブラウザは通知に対応していません');
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      setStatus('通知はすでに許可されています');
+      return;
+    }
+    const result = await Notification.requestPermission();
+    if (result === 'granted') {
+      setStatus('通知を許可しました');
+    } else {
+      setStatus('通知が許可されませんでした');
+    }
+  };
+
   const startEditGoal = (goal) => {
     setGoalEditingId(goal.id);
     setGoalEditing({
@@ -1236,6 +1267,11 @@ export default function App() {
 
       <section className="card">
         <h2>貯金目標</h2>
+        <div className="button-row">
+          <button type="button" className="secondary" onClick={requestNotificationPermission}>
+            目標達成通知を許可
+          </button>
+        </div>
         <form onSubmit={handleGoalSubmit} className="goal-form">
           <label>
             目標名

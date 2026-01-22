@@ -241,6 +241,15 @@ button.ghost {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  align-items: flex-start;
+}
+
+.summary-actions .button-row {
+  row-gap: 8px;
+}
+
+.summary-actions label {
+  width: 100%;
 }
 
 .table {
